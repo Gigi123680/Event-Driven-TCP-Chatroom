@@ -25,7 +25,7 @@ enum ConnectionState {
   WAITING_FOR_SERVER_HELLO, // client only
   ACTIVE,
   CLOSED,
-  ERROR
+  CONNECTION_ERROR
 };
 
 typedef struct Connection {

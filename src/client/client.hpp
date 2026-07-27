@@ -7,4 +7,5 @@ void client_init();
 typedef struct Client {
   std::string name;
   Connection *conn;
+  int epoll_fd;
 } Client;

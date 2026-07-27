@@ -1,11 +1,19 @@
 #include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <netinet/in.h>
 #include <string>
+#include <sys/epoll.h>
+#include <unistd.h>
 
 #include "../connection/connection.hpp"
+#include "../log/log.h"
+#include "../network/epoll.hpp"
 #include "client.hpp"
+
+#define TAG &CLIENT_TAG
 
 static Client *client;
 
@@ -28,7 +36,7 @@ void client_init() {
   while (true) {
     std::cout << "Enter server IP address: ";
     if (!(std::cin >> server_ip)) {
-      std::cerr << "Error reading server IP address." << std::endl;
+      logd(TAG, ERROR, "Error reading server IP address.\n");
       std::cin.clear(); // Clear the error flag
       std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
       continue;
@@ -41,14 +49,14 @@ void client_init() {
       break;
     }
 
-    std::cerr << "Invalid IPv4 address." << std::endl;
+    logd(TAG, ERROR, "Invalid IPv4 address.\n");
   }
 
   int server_port;
   while (true) {
     std::cout << "Enter server port: ";
     if (!(std::cin >> server_port)) {
-      std::cerr << "Error reading server port." << std::endl;
+      logd(TAG, ERROR, "Error reading server port.\n");
       std::cin.clear(); // Clear the error flag
       std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
       continue;
@@ -58,14 +66,13 @@ void client_init() {
       break;
     }
 
-    std::cerr << "Port must be between 1 and 65535." << std::endl;
+    logd(TAG, ERROR, "Port must be between 1 and 65535.\n");
   }
   server_addr.sin_port = htons(static_cast<uint16_t>(server_port));
 
   Connection *connection = client_connect_to_server(&server_addr);
   if (connection == nullptr) {
-    std::cerr << "Failed to start connection to server.\nExiting..."
-              << std::endl;
+    logd(TAG, ERROR, "Failed to start connection to server. Exiting...\n");
     return;
   }
   client->conn = connection;
@@ -74,7 +81,33 @@ void client_init() {
   client_event_loop();
 }
 
+void client_cleanup();
+
 /**
  * The main event loop for the client.
  */
-void client_event_loop() {}
+void client_event_loop() {
+  int epoll_fd = create_epoll(client->conn, STDIN_FILENO);
+  if (epoll_fd == -1) {
+    return;
+  }
+  client->epoll_fd = epoll_fd;
+
+  while (true) {
+  }
+
+  client_cleanup();
+}
+
+void client_cleanup() {
+  if (client) {
+    if (client->conn) {
+      close(client->conn->fd);
+      delete client->conn;
+    }
+    if (client->epoll_fd != -1) {
+      close(client->epoll_fd);
+    }
+    delete client;
+  }
+}

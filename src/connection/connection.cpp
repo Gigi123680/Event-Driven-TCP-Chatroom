@@ -12,8 +12,11 @@
 #include <vector>
 
 #include "../client/client.hpp"
-#include "../protocol/protocol.hpp"
+#include "../log/log.h"
+#include "../network/protocol.hpp"
 #include "connection.hpp"
+
+#define TAG &CONNECTION_TAG
 
 /**
  * Attemps to connect to a server given its address. Returns a pointer to a
@@ -23,19 +26,20 @@ Connection *client_connect_to_server(sockaddr_in *serv_addr) {
   // create new socket
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd == -1) {
-    std::cerr << "[connection] Failed to create socket.\n";
+    logd(TAG, ERROR, "Failed to create socket: %s\n", strerror(errno));
     return nullptr;
   }
 
   // set socket to non-blocking
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) {
-    std::cerr << "[connection] Failed to get socket flags.\n";
+    logd(TAG, ERROR, "Failed to get socket flags: %s\n", strerror(errno));
     close(fd);
     return nullptr;
   }
   if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-    std::cerr << "[connection] Failed to set socket to non-blocking mode.\n";
+    logd(TAG, ERROR, "Failed to set socket to non-blocking mode: %s\n",
+         strerror(errno));
     close(fd);
     return nullptr;
   }
@@ -54,7 +58,7 @@ Connection *client_connect_to_server(sockaddr_in *serv_addr) {
     conn->state = CONNECTING;
     return conn;
   } else {
-    std::cerr << "[connection] connection failed.\n";
+    logd(TAG, ERROR, "Connection failed: %s\n", strerror(errno));
     close(fd);
     return nullptr;
   }
