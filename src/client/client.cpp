@@ -6,11 +6,13 @@
 #include <netinet/in.h>
 #include <string>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "../connection/connection.hpp"
 #include "../log/log.h"
 #include "../network/epoll.hpp"
+#include "../network/protocol.hpp"
 #include "client.hpp"
 
 #define TAG &CLIENT_TAG
@@ -18,6 +20,9 @@
 static Client *client;
 
 void client_event_loop();
+void client_cleanup();
+static bool event_is_check_connection_success(int fd, uint32_t event_flags);
+static bool handle_connection_success_event();
 
 /**
  * Initialize a client instance, and set up the connection to the server.
@@ -81,7 +86,7 @@ void client_init() {
   client_event_loop();
 }
 
-void client_cleanup();
+static constexpr int MAX_EPOLL_EVENTS = 16;
 
 /**
  * The main event loop for the client.
@@ -93,10 +98,69 @@ void client_event_loop() {
   }
   client->epoll_fd = epoll_fd;
 
-  while (true) {
+  epoll_event events[MAX_EPOLL_EVENTS];
+  bool running = true;
+
+  while (running) {
+    // retreive active events
+    int event_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
+    if (event_count == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+
+      logd(TAG, ERROR, "epoll_wait failed: %s\n", strerror(errno));
+      break;
+    }
+
+    // handle events
+    for (int i = 0; i < event_count; ++i) {
+      int fd = events[i].data.fd;
+      uint32_t event_flags = events[i].events;
+
+      if (event_is_check_connection_success(fd, event_flags)) {
+        if (!handle_connection_success_event()) {
+          running = false;
+          break;
+        }
+      }
+    }
   }
 
   client_cleanup();
+}
+
+static bool event_is_check_connection_success(int fd, uint32_t event_flags) {
+  return fd == client->conn->fd && client->conn->state == CONNECTING &&
+         (event_flags & EPOLLIN);
+}
+
+/**
+ * Construct and queue the CLIENT_HELLO message, and modify epoll to listen for
+ * write events.
+ * @return true if message is succesfully queued and epoll modified
+ */
+static bool handle_connection_success_event() {
+  if (!client_check_connect(client->conn)) {
+    return false;
+  }
+
+  // construct and queue CLIENT_HELLO message
+  Message hello{};
+  hello.type = CLIENT_HELLO;
+  hello.payload = client->name;
+  hello.payload_length = static_cast<uint32_t>(hello.payload.size());
+  if (!protocol_queue_message(client->conn, hello)) {
+    return false;
+  }
+
+  // modify epoll events to listen for write event.
+  if (!epoll_fd_mod(client->epoll_fd, client->conn->fd,
+                    EPOLLOUT | EPOLLRDHUP)) {
+    return false;
+  }
+
+  return true;
 }
 
 void client_cleanup() {

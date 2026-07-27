@@ -36,46 +36,46 @@ static int epoll_update(int epoll_fd, int op, int fd, uint32_t events) {
 /**
  * Registers a new file descriptor with the epoll instance.
  */
-int epoll_register(int epoll_fd, int fd, uint32_t events) {
+bool epoll_register(int epoll_fd, int fd, uint32_t events) {
   return epoll_fd_add(epoll_fd, fd, events);
 }
 
 /**
  * Adds a new file descriptor to the epoll instance.
  */
-int epoll_fd_add(int epoll_fd, int fd, uint32_t events) {
+bool epoll_fd_add(int epoll_fd, int fd, uint32_t events) {
   if (epoll_update(epoll_fd, EPOLL_CTL_ADD, fd, events) == -1) {
     logd(TAG, ERROR, "Failed to add fd %d to epoll: %s\n", fd, strerror(errno));
-    return -1;
+    return false;
   }
 
-  return 0;
+  return true;
 }
 
 /**
  * Modifies the events for an existing file descriptor in the epoll instance.
  */
-int epoll_fd_mod(int epoll_fd, int fd, uint32_t events) {
+bool epoll_fd_mod(int epoll_fd, int fd, uint32_t events) {
   if (epoll_update(epoll_fd, EPOLL_CTL_MOD, fd, events) == -1) {
     logd(TAG, ERROR, "Failed to modify events for fd %d: %s\n", fd,
          strerror(errno));
-    return -1;
+    return false;
   }
 
-  return 0;
+  return true;
 }
 
 /**
  * Removes a file descriptor from the epoll instance.
  */
-int epoll_fd_remove(int epoll_fd, int fd, uint32_t events) {
+bool epoll_fd_remove(int epoll_fd, int fd, uint32_t events) {
   if (epoll_update(epoll_fd, EPOLL_CTL_DEL, fd, events) == -1) {
     logd(TAG, ERROR, "Failed to remove fd %d from epoll: %s\n", fd,
          strerror(errno));
-    return -1;
+    return false;
   }
 
-  return 0;
+  return true;
 }
 
 static uint32_t initial_socket_events(const Connection *conn) {
@@ -103,7 +103,7 @@ static uint32_t initial_socket_events(const Connection *conn) {
  * @param STDIN_FD The file descriptor for standard input (stdin).
  * @return The epoll file descriptor on success, or -1 on failure.
  */
-static int create_epoll(const Connection *conn, int STDIN_FD) {
+int create_epoll(const Connection *conn, int STDIN_FD) {
   int epoll_fd = epoll_create1(0);
   if (epoll_fd == -1) {
     logd(TAG, ERROR, "Failed to create epoll instance: %s\n", strerror(errno));
@@ -111,13 +111,13 @@ static int create_epoll(const Connection *conn, int STDIN_FD) {
   }
 
   // add socket to epoll
-  if (epoll_register(epoll_fd, conn->fd, initial_socket_events(conn)) == -1) {
+  if (!epoll_register(epoll_fd, conn->fd, initial_socket_events(conn))) {
     close(epoll_fd);
     return -1;
   }
 
   // add stdin to epoll
-  if (epoll_register(epoll_fd, STDIN_FD, EPOLLIN) == -1) {
+  if (!epoll_register(epoll_fd, STDIN_FD, EPOLLIN)) {
     close(epoll_fd);
     return -1;
   }

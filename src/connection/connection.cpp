@@ -19,8 +19,9 @@
 #define TAG &CONNECTION_TAG
 
 /**
- * Attemps to connect to a server given its address. Returns a pointer to a
- * Connection struct if successful or connection underway; or nullptr if failed
+ * Attempt to establish a TCP connection to the server.
+ * @return A pointer to a Connection object if the connection is successful or
+ * in progress, nullptr otherwise.
  */
 Connection *client_connect_to_server(sockaddr_in *serv_addr) {
   // create new socket
@@ -62,4 +63,31 @@ Connection *client_connect_to_server(sockaddr_in *serv_addr) {
     close(fd);
     return nullptr;
   }
+}
+
+/**
+ * Check if the TCP connection has been successfully established.
+ * Should be called when connections state is CONNECTING.
+ */
+bool client_check_connect(Connection *conn) {
+  int socket_error = 0;
+  socklen_t socket_error_len = sizeof(socket_error);
+
+  if (getsockopt(conn->fd, SOL_SOCKET, SO_ERROR, &socket_error,
+                 &socket_error_len) == -1) {
+    logd(TAG, ERROR, "Failed to check connection status: %s\n",
+         strerror(errno));
+    conn->state = CONNECTION_ERROR;
+    return false;
+  }
+
+  if (socket_error != 0) {
+    logd(TAG, ERROR, "Connection failed: %s\n", strerror(socket_error));
+    conn->state = CONNECTION_ERROR;
+    return false;
+  }
+
+  conn->state = SENDING_CLIENT_HELLO;
+  logd(TAG, INFO, "TCP connection to server established.\n");
+  return true;
 }

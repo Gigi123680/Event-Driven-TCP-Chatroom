@@ -38,3 +38,4 @@ typedef struct Connection {
 } Connection;
 
 Connection *client_connect_to_server(sockaddr_in *serv_addr);
+bool client_check_connect(Connection *conn);
