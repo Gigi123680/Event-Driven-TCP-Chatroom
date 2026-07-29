@@ -95,15 +95,13 @@ static uint32_t initial_socket_events(const Connection *conn) {
   return events;
 }
 
-/**
- * Creates an epoll instance and adds the socket and stdin to it.
- * Socket events are determined based on the connection state.
- * Stdin is always monitored for input.
- * @param conn The connection object containing the socket file descriptor.
- * @param STDIN_FD The file descriptor for standard input (stdin).
- * @return The epoll file descriptor on success, or -1 on failure.
- */
-int create_epoll(const Connection *conn, int STDIN_FD) {
+static uint32_t initial_socket_events(int socket_fd) {
+  (void)socket_fd;
+  return EPOLLIN;
+}
+
+static int create_epoll_with_socket_events(int socket_fd, int STDIN_FD,
+                                           uint32_t socket_events) {
   int epoll_fd = epoll_create1(0);
   if (epoll_fd == -1) {
     logd(TAG, ERROR, "Failed to create epoll instance: %s\n", strerror(errno));
@@ -111,7 +109,7 @@ int create_epoll(const Connection *conn, int STDIN_FD) {
   }
 
   // add socket to epoll
-  if (!epoll_register(epoll_fd, conn->fd, initial_socket_events(conn))) {
+  if (!epoll_register(epoll_fd, socket_fd, socket_events)) {
     close(epoll_fd);
     return -1;
   }
@@ -123,4 +121,27 @@ int create_epoll(const Connection *conn, int STDIN_FD) {
   }
 
   return epoll_fd;
+}
+
+/**
+ * Creates an epoll instance and adds the socket and stdin to it.
+ * Socket events are determined based on the connection state.
+ * Stdin is always monitored for input.
+ * @param conn The connection object containing the socket file descriptor.
+ * @param STDIN_FD The file descriptor for standard input (stdin).
+ * @return The epoll file descriptor on success, or -1 on failure.
+ */
+int create_epoll(const Connection *conn, int STDIN_FD) {
+  return create_epoll_with_socket_events(conn->fd, STDIN_FD,
+                                         initial_socket_events(conn));
+}
+
+/**
+ * Creates an epoll instance and adds the socket and stdin to it.
+ * Socket events are determined based on the socket state.
+ * Stdin is always monitored for input.
+ */
+int create_epoll(int socket_fd, int STDIN_FD) {
+  return create_epoll_with_socket_events(socket_fd, STDIN_FD,
+                                         initial_socket_events(socket_fd));
 }
