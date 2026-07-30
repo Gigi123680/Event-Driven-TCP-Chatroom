@@ -1,6 +1,6 @@
 #include <arpa/inet.h>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -18,6 +18,8 @@
 #include "client.hpp"
 
 #define TAG &CLIENT_TAG
+#define logi(...) logd(TAG, INFO, __VA_ARGS__)
+#define loge(...) logd(TAG, ERROR, __VA_ARGS__)
 
 static Client *client;
 static bool client_quitting = false;
@@ -26,6 +28,7 @@ void client_event_loop();
 void client_cleanup();
 static bool event_is_check_connection_success(int fd, uint32_t event_flags);
 static bool handle_connection_success_event();
+static bool queue_client_hello();
 static bool event_is_read_network_message(int fd, uint32_t event_flags);
 static bool handle_read_network_message_event();
 static bool handle_network_message(const Message &message);
@@ -61,6 +64,8 @@ void client_init() {
   std::cout << "Your name is: " << name << std::endl;
   client = new Client();
   client->name = name;
+  client->conn = nullptr;
+  client->epoll_fd = -1;
 
   std::string server_ip;
   sockaddr_in server_addr{};
@@ -129,6 +134,19 @@ void client_event_loop() {
   }
   client->epoll_fd = epoll_fd;
 
+  // queue CLIENT_HELLO if connection established
+  if (client->conn->state == SENDING_CLIENT_HELLO &&
+      client->conn->out_buffer.empty()) {
+    if (!queue_client_hello()) {
+      goto c_cleanup;
+    }
+
+    if (!epoll_fd_mod(client->epoll_fd, client->conn->fd,
+                      EPOLLOUT | EPOLLRDHUP)) {
+      goto c_cleanup;
+    }
+  }
+
   while (running) {
     // retreive active events
     int event_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
@@ -188,7 +206,7 @@ static bool event_is_read_network_message(int fd, uint32_t event_flags) {
   return fd == client->conn->fd &&
          (client->conn->state == WAITING_FOR_SERVER_HELLO ||
           client->conn->state == ACTIVE) &&
-         (event_flags & EPOLLIN);
+         (event_flags & (EPOLLIN | EPOLLRDHUP | EPOLLHUP));
 }
 
 static bool handle_read_network_message_event() {
@@ -204,6 +222,10 @@ static bool handle_read_network_message_event() {
     }
 
     if (!message.has_value()) {
+      if (client->conn->state == CLOSED) {
+        return false;
+      }
+
       return true;
     }
 
@@ -306,7 +328,7 @@ static bool handle_send_network_message_event() {
 
 static bool event_is_check_connection_success(int fd, uint32_t event_flags) {
   return fd == client->conn->fd && client->conn->state == CONNECTING &&
-         (event_flags & EPOLLIN);
+         (event_flags & (EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP));
 }
 
 /**
@@ -323,12 +345,7 @@ static bool handle_connection_success_event() {
     return false;
   }
 
-  // construct and queue CLIENT_HELLO message
-  Message hello{};
-  hello.type = CLIENT_HELLO;
-  hello.payload = client->name;
-  hello.payload_length = static_cast<uint32_t>(hello.payload.size());
-  if (!protocol_queue_message(client->conn, hello)) {
+  if (!queue_client_hello()) {
     return false;
   }
 
@@ -339,6 +356,14 @@ static bool handle_connection_success_event() {
   }
 
   return true;
+}
+
+static bool queue_client_hello() {
+  Message hello{};
+  hello.type = CLIENT_HELLO;
+  hello.payload = client->name;
+  hello.payload_length = static_cast<uint32_t>(hello.payload.size());
+  return protocol_queue_message(client->conn, hello);
 }
 
 /**
@@ -360,12 +385,15 @@ static bool event_is_read_stdin(int fd, uint32_t event_flags) {
  * ACTIVE.
  */
 static bool handle_read_stdin_event() {
+  logi("Handling STDIN read event.\n");
   std::string line;
   if (!std::getline(std::cin, line)) {
     return false;
   }
+  loge("Read line from stdin: %s\n", line.c_str());
 
   if (line.empty()) {
+    loge("Empty message ignored.\n");
     return true;
   }
 
@@ -374,6 +402,7 @@ static bool handle_read_stdin_event() {
   }
 
   if (client->conn->state != ACTIVE) {
+    logi("Connection not active, input ignored.\n");
     return true;
   }
 
@@ -391,6 +420,7 @@ static bool handle_read_stdin_event() {
     return false;
   }
 
+  logi("Printing message to stdout with format.\n");
   format_print_message(client->name, chat);
 
   return epoll_fd_mod(client->epoll_fd, client->conn->fd,
@@ -422,8 +452,8 @@ static bool name_is_reserved(const std::string &name) {
   std::string lowercase_name;
   lowercase_name.reserve(name.size());
   for (char ch : name) {
-    lowercase_name.push_back(static_cast<char>(
-        std::tolower(static_cast<unsigned char>(ch))));
+    lowercase_name.push_back(
+        static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
   }
 
   return lowercase_name == "client" || lowercase_name == "server" ||

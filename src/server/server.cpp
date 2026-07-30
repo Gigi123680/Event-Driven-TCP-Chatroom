@@ -239,7 +239,7 @@ static bool event_is_receive_client_hello(int fd, uint32_t event_flags) {
 
   Connection *conn = get_connection_of(fd);
   return conn != nullptr && conn->state == WAITING_FOR_CLIENT_HELLO &&
-         (event_flags & EPOLLIN);
+         (event_flags & (EPOLLIN | EPOLLRDHUP | EPOLLHUP));
 }
 
 static bool handle_receive_client_hello_event(int fd) {
@@ -262,6 +262,10 @@ static bool handle_receive_client_hello_event(int fd) {
 
   // no complete message yet
   if (!message.has_value()) {
+    if (conn->state == CLOSED) {
+      return remove_connection(conn);
+    }
+
     return true;
   }
 
@@ -346,10 +350,12 @@ static bool event_is_read_network_package(int fd, uint32_t event_flags) {
   }
 
   Connection *conn = get_connection_of(fd);
-  return conn != nullptr && conn->state == ACTIVE && (event_flags & EPOLLIN);
+  return conn != nullptr && conn->state == ACTIVE &&
+         (event_flags & (EPOLLIN | EPOLLRDHUP | EPOLLHUP));
 }
 
 static bool handle_read_network_package_event(int fd) {
+  logd(TAG, INFO, "Handling network read event.\n");
   Connection *conn = get_connection_of(fd);
   if (conn == nullptr) {
     logd(TAG, ERROR, "No connection found for fd %d.\n", fd);
@@ -368,10 +374,19 @@ static bool handle_read_network_package_event(int fd) {
     }
 
     if (!message.has_value()) {
+      if (conn->state == CLOSED) {
+        if (!announce_client_disconnected(conn)) {
+          return false;
+        }
+
+        return remove_connection(conn);
+      }
+
       return true;
     }
 
     if (message->type == CLOSE_CON) {
+      logd(TAG, INFO, "Received CLOSE_CON from %s.\n", conn->name.c_str());
       if (!message->payload.empty()) {
         logd(TAG, ERROR, "Expected CLOSE_CON with empty payload.\n");
         conn->state = CONNECTION_ERROR;
@@ -493,6 +508,7 @@ static bool announce_client_connected(Connection *conn) {
 }
 
 static bool announce_client_disconnected(Connection *conn) {
+  logd(TAG, INFO, "Announcing disconnection of %s.\n", conn->name.c_str());
   Message notice{};
   notice.type = CHAT;
   notice.payload = "`" + conn->name + "` disconnected.";
@@ -500,6 +516,8 @@ static bool announce_client_disconnected(Connection *conn) {
 
   format_print_message("server", notice);
 
+  logd(TAG, INFO, "Broadcasting disconnection of %s to other clients.\n",
+       conn->name.c_str());
   Message broadcast = format_broadcast_message("server", notice);
   return broadcast_message_to_other_clients(conn, broadcast);
 }

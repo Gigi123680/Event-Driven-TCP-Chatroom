@@ -11,6 +11,7 @@ int main() {
   logd_level_set(&CLIENT_TAG, ERROR);
   logd_level_set(&CONNECTION_TAG, ERROR);
   logd_level_set(&EPOLL_TAG, ERROR);
+  log_level_set_all_OFF();
 
   while (true) {
     std::cout << "Welcome to the chatroom!" << std::endl;

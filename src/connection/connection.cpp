@@ -102,18 +102,21 @@ Connection *client_connect_to_server(sockaddr_in *serv_addr) {
   int result =
       connect(fd, reinterpret_cast<sockaddr *>(serv_addr), sizeof(*serv_addr));
   if (result == 0) {
+    // connection established
     Connection *conn = new Connection();
     conn->fd = fd;
     conn->state = SENDING_CLIENT_HELLO;
     conn->bytes_written = 0;
     return conn;
   } else if (result == -1 && errno == EINPROGRESS) {
+    // connection underway
     Connection *conn = new Connection();
     conn->fd = fd;
     conn->state = CONNECTING;
     conn->bytes_written = 0;
     return conn;
   } else {
+    // connection failed
     logd(TAG, ERROR, "Connection failed: %s\n", strerror(errno));
     close(fd);
     return nullptr;
@@ -188,8 +191,10 @@ bool connection_flush_out_buffer(Connection *conn) {
 /**
  * Read all immediately available socket bytes into the connection's in_buffer.
  * Message parsing is not implemented, refer to protocol_parse_message for that.
+ * @note If recv returns 0, then connection state is set to CLOSED.
  */
 bool connection_read_into_in_buffer(Connection *conn) {
+  logd(TAG, INFO, "Reading from socket fd %d into in_buffer.\n", conn->fd);
   char buffer[4096];
 
   while (true) {
@@ -198,6 +203,7 @@ bool connection_read_into_in_buffer(Connection *conn) {
     // append to in_buffer
     if (received > 0) {
       conn->in_buffer.insert(conn->in_buffer.end(), buffer, buffer + received);
+      logd(TAG, INFO, "Message read.\n");
       continue;
     }
 
@@ -205,12 +211,14 @@ bool connection_read_into_in_buffer(Connection *conn) {
     if (received == 0) {
       logd(TAG, INFO, "Peer closed the connection.\n");
       conn->state = CLOSED;
-      return false;
+      return true;
     }
     if (errno == EINTR) {
+      logd(TAG, INFO, "Recv interrupted by signal.\n");
       return true;
     }
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      logd(TAG, INFO, "No more messages to read.\n");
       return true;
     }
 

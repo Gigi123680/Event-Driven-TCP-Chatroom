@@ -7,11 +7,14 @@
 
 #include <arpa/inet.h>
 #include <cstring>
+#include <iostream>
 #include <optional>
 
 #include "../log/log.h"
 
 #define TAG &PROTOCOL_TAG
+#define logi(...) logd(TAG, INFO, __VA_ARGS__)
+#define loge(...) logd(TAG, ERROR, __VA_ARGS__)
 
 static constexpr uint32_t MAX_PAYLOAD_SIZE = 64 * 1024;
 static constexpr size_t FRAME_HEADER_SIZE = 5;
@@ -28,8 +31,12 @@ bool protocol_payload_length_is_legal(size_t payload_length) {
  * responsible for that.
  */
 bool protocol_queue_message(Connection *conn, const Message &message) {
+  logi("Queuing message of type %d with payload length %u bytes.\n",
+       static_cast<int>(message.type), message.payload_length);
+  logi("Out buffer size before queuing: %zu bytes.\n", conn->out_buffer.size());
   if (!protocol_payload_length_is_legal(message.payload.size())) {
     logd(TAG, ERROR, "Payload too large: %zu bytes\n", message.payload.size());
+    std::cerr << "[app] message length too long." << std::endl;
     conn->state = CONNECTION_ERROR;
     return false;
   }
@@ -47,6 +54,8 @@ bool protocol_queue_message(Connection *conn, const Message &message) {
   // append payload: payload_length bytes
   conn->out_buffer.insert(conn->out_buffer.end(), message.payload.begin(),
                           message.payload.end());
+  logi("Message queued successfully. Out buffer size: %zu bytes.\n",
+       conn->out_buffer.size());
 
   return true;
 }
