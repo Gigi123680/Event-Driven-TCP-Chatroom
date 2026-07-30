@@ -2,9 +2,16 @@
 #include <string>
 
 #include "client/client.hpp"
+#include "log/log.h"
 #include "server/server.hpp"
 
 int main() {
+  logd_level_set(&PROTOCOL_TAG, ERROR);
+  logd_level_set(&SERVER_TAG, ERROR);
+  logd_level_set(&CLIENT_TAG, ERROR);
+  logd_level_set(&CONNECTION_TAG, ERROR);
+  logd_level_set(&EPOLL_TAG, ERROR);
+
   while (true) {
     std::cout << "Welcome to the chatroom!" << std::endl;
     std::cout << "Please select a mode:\n1. Server\n2. Client" << std::endl;

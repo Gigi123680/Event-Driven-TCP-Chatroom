@@ -16,6 +16,10 @@
 static constexpr uint32_t MAX_PAYLOAD_SIZE = 64 * 1024;
 static constexpr size_t FRAME_HEADER_SIZE = 5;
 
+bool protocol_payload_length_is_legal(size_t payload_length) {
+  return payload_length <= MAX_PAYLOAD_SIZE;
+}
+
 /**
  * Queues a network formatted message to the connection's out_buffer.
  * @return true if the message was successfully queued, false if the payload is
@@ -24,7 +28,7 @@ static constexpr size_t FRAME_HEADER_SIZE = 5;
  * responsible for that.
  */
 bool protocol_queue_message(Connection *conn, const Message &message) {
-  if (message.payload.size() > MAX_PAYLOAD_SIZE) {
+  if (!protocol_payload_length_is_legal(message.payload.size())) {
     logd(TAG, ERROR, "Payload too large: %zu bytes\n", message.payload.size());
     conn->state = CONNECTION_ERROR;
     return false;
@@ -69,7 +73,7 @@ std::optional<Message> protocol_parse_message(Connection *conn) {
   uint32_t payload_length = ntohl(network_payload_length);
 
   // verify legal payload length
-  if (payload_length > MAX_PAYLOAD_SIZE) {
+  if (!protocol_payload_length_is_legal(payload_length)) {
     logd(TAG, ERROR, "Received oversized payload: %u bytes\n", payload_length);
     conn->state = CONNECTION_ERROR;
     return std::nullopt;

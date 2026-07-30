@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cctype>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -19,6 +20,7 @@
 #define TAG &CLIENT_TAG
 
 static Client *client;
+static bool client_quitting = false;
 
 void client_event_loop();
 void client_cleanup();
@@ -31,15 +33,31 @@ static bool event_is_send_network_message(int fd, uint32_t event_flags);
 static bool handle_send_network_message_event();
 static bool event_is_read_stdin(int fd, uint32_t event_flags);
 static bool handle_read_stdin_event();
+static bool connection_is_underway_or_established();
+static bool handle_quit_command();
+static bool name_is_reserved(const std::string &name);
 
 /**
  * Initialize a client instance, and set up the connection to the server.
  */
 void client_init() {
   std::cout << "Initializing client..." << std::endl;
-  std::cout << "Enter your name: ";
   std::string name;
-  std::cin >> name;
+  while (true) {
+    std::cout << "Enter your name: ";
+    if (!(std::cin >> name)) {
+      logd(TAG, ERROR, "Error reading client name.\n");
+      std::cin.clear();
+      std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+      continue;
+    }
+
+    if (!name_is_reserved(name)) {
+      break;
+    }
+
+    std::cout << "[app] reserved name." << std::endl;
+  }
   std::cout << "Your name is: " << name << std::endl;
   client = new Client();
   client->name = name;
@@ -128,6 +146,10 @@ void client_event_loop() {
       int fd = events[i].data.fd;
       uint32_t event_flags = events[i].events;
 
+      if (client_quitting && !event_is_send_network_message(fd, event_flags)) {
+        continue;
+      }
+
       if (event_is_check_connection_success(fd, event_flags)) {
         if (!handle_connection_success_event()) {
           running = false;
@@ -159,6 +181,10 @@ c_cleanup:
  * =========== Network read event ==================
  */
 static bool event_is_read_network_message(int fd, uint32_t event_flags) {
+  if (client_quitting) {
+    return false;
+  }
+
   return fd == client->conn->fd &&
          (client->conn->state == WAITING_FOR_SERVER_HELLO ||
           client->conn->state == ACTIVE) &&
@@ -207,6 +233,18 @@ static bool handle_network_message(const Message &message) {
 
   // parse BROADCAST and print to stdout
   if (client->conn->state == ACTIVE) {
+    if (message.type == CLOSE_CON) {
+      if (!message.payload.empty()) {
+        logd(TAG, ERROR, "Expected CLOSE_CON with empty payload.\n");
+        client->conn->state = CONNECTION_ERROR;
+        return false;
+      }
+
+      std::cout << "[client] server closed the room." << std::endl;
+      client->conn->state = CLOSED;
+      return false;
+    }
+
     if (message.type != BROADCAST) {
       logd(TAG, ERROR, "Expected BROADCAST, received type %d.\n",
            static_cast<int>(message.type));
@@ -229,7 +267,7 @@ static bool handle_network_message(const Message &message) {
 
 static bool event_is_send_network_message(int fd, uint32_t event_flags) {
   return fd == client->conn->fd &&
-         (client->conn->state == SENDING_CLIENT_HELLO ||
+         (client_quitting || client->conn->state == SENDING_CLIENT_HELLO ||
           client->conn->state == ACTIVE) &&
          (client->conn->out_buffer.size() > 0) && (event_flags & EPOLLOUT);
 }
@@ -248,6 +286,11 @@ static bool handle_send_network_message_event() {
   // partial write, wait for next EPOLLOUT event
   if (!client->conn->out_buffer.empty()) {
     return true;
+  }
+
+  if (client_quitting) {
+    shutdown(client->conn->fd, SHUT_WR);
+    return false;
   }
 
   if (client->conn->state == SENDING_CLIENT_HELLO) {
@@ -303,6 +346,10 @@ static bool handle_connection_success_event() {
  */
 
 static bool event_is_read_stdin(int fd, uint32_t event_flags) {
+  if (client_quitting) {
+    return false;
+  }
+
   return fd == STDIN_FILENO && (event_flags & EPOLLIN);
 }
 
@@ -322,7 +369,16 @@ static bool handle_read_stdin_event() {
     return true;
   }
 
+  if (line == "/quit" && connection_is_underway_or_established()) {
+    return handle_quit_command();
+  }
+
   if (client->conn->state != ACTIVE) {
+    return true;
+  }
+
+  if (!protocol_payload_length_is_legal(line.size())) {
+    std::cout << "[app] message length too long." << std::endl;
     return true;
   }
 
@@ -339,6 +395,39 @@ static bool handle_read_stdin_event() {
 
   return epoll_fd_mod(client->epoll_fd, client->conn->fd,
                       EPOLLIN | EPOLLOUT | EPOLLRDHUP);
+}
+
+static bool connection_is_underway_or_established() {
+  return client->conn != nullptr && client->conn->state != CLOSED &&
+         client->conn->state != CONNECTION_ERROR;
+}
+
+static bool handle_quit_command() {
+  std::cout << "[client] exiting." << std::endl;
+
+  Message close_message{};
+  close_message.type = CLOSE_CON;
+  close_message.payload_length = 0;
+
+  if (!protocol_queue_message(client->conn, close_message)) {
+    return false;
+  }
+
+  client_quitting = true;
+  return epoll_fd_mod(client->epoll_fd, client->conn->fd,
+                      EPOLLOUT | EPOLLRDHUP);
+}
+
+static bool name_is_reserved(const std::string &name) {
+  std::string lowercase_name;
+  lowercase_name.reserve(name.size());
+  for (char ch : name) {
+    lowercase_name.push_back(static_cast<char>(
+        std::tolower(static_cast<unsigned char>(ch))));
+  }
+
+  return lowercase_name == "client" || lowercase_name == "server" ||
+         lowercase_name == "app";
 }
 
 void client_cleanup() {

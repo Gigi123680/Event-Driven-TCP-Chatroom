@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -11,7 +12,8 @@ enum MessageType : uint8_t {
   SERVER_HELLO = 2,
   CHAT = 3,
   BROADCAST = 4,
-  ERROR_MESSAGE = 5
+  ERROR_MESSAGE = 5,
+  CLOSE_CON = 6
 };
 
 typedef struct Message {
@@ -22,3 +24,4 @@ typedef struct Message {
 
 bool protocol_queue_message(Connection *conn, const Message &message);
 std::optional<Message> protocol_parse_message(Connection *conn);
+bool protocol_payload_length_is_legal(size_t payload_length);
