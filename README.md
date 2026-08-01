@@ -2,7 +2,7 @@
 
 ## Quick Demo
 
-This project targets Linux.
+This project targets Linux and macOS.
 
 ```sh
 git clone <repo-url>
@@ -41,8 +41,10 @@ as a client or to close the room as the server.
 ## Overview
 
 This is a small single-threaded TCP chatroom written in C++17. It uses Berkeley
-sockets, non-blocking I/O, and `epoll` to handle terminal input and network
-events in one event loop.
+sockets, non-blocking I/O, and a small event-loop compatibility layer to handle
+terminal input and network events in one event loop. Linux uses native `epoll`;
+macOS uses a `poll()`-backed compatibility implementation with the same
+epoll-shaped API.
 
 The chatroom uses a centralized model:
 
@@ -60,7 +62,7 @@ broadcasts them to the other connected clients.
 - Server mode and client mode in the same executable
 - Multiple clients connected to one server
 - Non-blocking TCP sockets
-- `epoll`-based event loops
+- Event-loop abstraction using `epoll` on Linux and `poll()` on macOS
 - Application-level client/server handshake
 - Message framing over TCP
 - Partial read/write buffering
@@ -94,7 +96,7 @@ The main pieces are:
 - `src/client`: client setup and client event loop
 - `src/server`: server setup, accepting clients, broadcasting, and shutdown
 - `src/connection`: socket setup plus connection read/write buffering
-- `src/network`: `epoll` helpers and protocol framing/parsing
+- `src/network`: event-loop compatibility helpers and protocol framing/parsing
 - `src/frontend`: terminal message formatting
 - `src/log`: small C logger used by the C++ modules
 
@@ -103,7 +105,7 @@ buffer, output buffer, write offset, and peer name.
 
 ## Limitations
 
-- Linux only
+- No Windows support
 - IPv4 only for now
 - No encryption or authentication
 - No terminal UI library

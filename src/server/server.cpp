@@ -1,10 +1,10 @@
 #include <cctype>
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <iostream>
 #include <limits>
 #include <string>
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -41,6 +41,8 @@ static bool all_connection_buffers_empty();
 static bool remove_connection(Connection *conn);
 static Connection *get_connection_of(int fd);
 static bool name_is_reserved(const std::string &name);
+static int accept_nonblocking(int listen_fd, sockaddr *addr,
+                              socklen_t *addrlen);
 
 void server_init() {
   std::cout << "Server mode selected." << std::endl;
@@ -182,13 +184,13 @@ static bool handle_accept_client_connection_event() {
     logd(TAG, INFO, "Accepting new client connection...\n");
     sockaddr_in client_addr{};
     socklen_t client_addr_len = sizeof(client_addr);
-    int client_fd =
-        accept4(server->listen_fd, reinterpret_cast<sockaddr *>(&client_addr),
-                &client_addr_len, SOCK_NONBLOCK);
+    int client_fd = accept_nonblocking(
+        server->listen_fd, reinterpret_cast<sockaddr *>(&client_addr),
+        &client_addr_len);
 
     if (client_fd == -1) {
       if (errno == EINTR) {
-        logd(TAG, INFO, "accept4 interrupted by signal, returning...\n");
+        logd(TAG, INFO, "accept interrupted by signal, returning...\n");
         return true;
       }
 
@@ -228,6 +230,28 @@ static bool handle_accept_client_connection_event() {
   }
 }
 
+static int accept_nonblocking(int listen_fd, sockaddr *addr,
+                              socklen_t *addrlen) {
+#ifdef __linux__
+  return accept4(listen_fd, addr, addrlen, SOCK_NONBLOCK);
+#else
+  int fd = accept(listen_fd, addr, addrlen);
+  if (fd == -1) {
+    return -1;
+  }
+
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+    int saved_errno = errno;
+    close(fd);
+    errno = saved_errno;
+    return -1;
+  }
+
+  return fd;
+#endif
+}
+
 /**
  * ========== Receive CLIENT_HELLO event ============
  */
@@ -251,13 +275,13 @@ static bool handle_receive_client_hello_event(int fd) {
 
   // read from socket
   if (!connection_read_into_in_buffer(conn)) {
-    return false;
+    return remove_connection(conn);
   }
 
   // parse network messages
   std::optional<Message> message = protocol_parse_message(conn);
   if (conn->state == CONNECTION_ERROR) {
-    return false;
+    return remove_connection(conn);
   }
 
   // no complete message yet
@@ -274,13 +298,13 @@ static bool handle_receive_client_hello_event(int fd) {
     logd(TAG, ERROR, "Expected CLIENT_HELLO, received type %d.\n",
          static_cast<int>(message->type));
     conn->state = CONNECTION_ERROR;
-    return false;
+    return remove_connection(conn);
   }
 
   if (message->payload.empty()) {
     logd(TAG, ERROR, "Client sent empty name.\n");
     conn->state = CONNECTION_ERROR;
-    return false;
+    return remove_connection(conn);
   }
 
   conn->name = message->payload;
@@ -363,14 +387,14 @@ static bool handle_read_network_package_event(int fd) {
   }
 
   if (!connection_read_into_in_buffer(conn)) {
-    return false;
+    return remove_connection(conn);
   }
 
   // read all available messages and broadcast to connected clients
   while (true) {
     std::optional<Message> message = protocol_parse_message(conn);
     if (conn->state == CONNECTION_ERROR) {
-      return false;
+      return remove_connection(conn);
     }
 
     if (!message.has_value()) {
@@ -390,7 +414,7 @@ static bool handle_read_network_package_event(int fd) {
       if (!message->payload.empty()) {
         logd(TAG, ERROR, "Expected CLOSE_CON with empty payload.\n");
         conn->state = CONNECTION_ERROR;
-        return false;
+        return remove_connection(conn);
       }
 
       if (!announce_client_disconnected(conn)) {
@@ -404,7 +428,7 @@ static bool handle_read_network_package_event(int fd) {
       logd(TAG, ERROR, "Expected CHAT, received type %d.\n",
            static_cast<int>(message->type));
       conn->state = CONNECTION_ERROR;
-      return false;
+      return remove_connection(conn);
     }
 
     // print to STDOUT

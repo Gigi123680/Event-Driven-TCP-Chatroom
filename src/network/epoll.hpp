@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "epoll_compat.hpp"
 #include "../connection/connection.hpp"
 
 int create_epoll(const Connection *conn, int STDIN_FD);

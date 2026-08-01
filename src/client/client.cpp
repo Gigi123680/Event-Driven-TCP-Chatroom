@@ -6,7 +6,6 @@
 #include <limits>
 #include <netinet/in.h>
 #include <string>
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -36,7 +35,7 @@ static bool event_is_send_network_message(int fd, uint32_t event_flags);
 static bool handle_send_network_message_event();
 static bool event_is_read_stdin(int fd, uint32_t event_flags);
 static bool handle_read_stdin_event();
-static bool connection_is_underway_or_established();
+static bool tcp_connection_is_established();
 static bool handle_quit_command();
 static bool name_is_reserved(const std::string &name);
 
@@ -341,10 +340,12 @@ static bool event_is_check_connection_success(int fd, uint32_t event_flags) {
  * @return true if message is succesfully queued and epoll modified
  */
 static bool handle_connection_success_event() {
+  logd(TAG, INFO, "Checking connection success state.\n");
   if (!client_check_connect(client->conn)) {
     return false;
   }
-
+  logd(TAG, INFO, "TCP connection established.\n");
+  logd(TAG, INFO, "Queuing CLIENT_HELLO message.\n");
   if (!queue_client_hello()) {
     return false;
   }
@@ -397,7 +398,12 @@ static bool handle_read_stdin_event() {
     return true;
   }
 
-  if (line == "/quit" && connection_is_underway_or_established()) {
+  if (line == "/quit") {
+    if (!tcp_connection_is_established()) {
+      std::cout << "[client] exiting." << std::endl;
+      return false;
+    }
+
     return handle_quit_command();
   }
 
@@ -427,9 +433,10 @@ static bool handle_read_stdin_event() {
                       EPOLLIN | EPOLLOUT | EPOLLRDHUP);
 }
 
-static bool connection_is_underway_or_established() {
+static bool tcp_connection_is_established() {
   return client->conn != nullptr && client->conn->state != CLOSED &&
-         client->conn->state != CONNECTION_ERROR;
+         client->conn->state != CONNECTION_ERROR &&
+         client->conn->state != CONNECTING;
 }
 
 static bool handle_quit_command() {

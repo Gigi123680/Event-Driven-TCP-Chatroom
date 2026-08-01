@@ -5,7 +5,6 @@
 #include <iostream>
 #include <netinet/in.h>
 #include <string>
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -13,6 +12,7 @@
 
 #include "../client/client.hpp"
 #include "../log/log.h"
+#include "../network/epoll_compat.hpp"
 #include "../network/protocol.hpp"
 #include "connection.hpp"
 
@@ -85,6 +85,8 @@ int server_create_listening_socket(int port) {
  * in progress, nullptr otherwise.
  */
 Connection *client_connect_to_server(sockaddr_in *serv_addr) {
+  logd(TAG, INFO, "Attempting to connect to server at %s:%d\n",
+       inet_ntoa(serv_addr->sin_addr), ntohs(serv_addr->sin_port));
   // create new socket
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd == -1) {
@@ -97,12 +99,15 @@ Connection *client_connect_to_server(sockaddr_in *serv_addr) {
     close(fd);
     return nullptr;
   }
+  logd(TAG, INFO, "Non blocking socket created.\n");
 
   // attempt connection
+  logd(TAG, INFO, "Attempting connection...\n");
   int result =
       connect(fd, reinterpret_cast<sockaddr *>(serv_addr), sizeof(*serv_addr));
   if (result == 0) {
     // connection established
+    logd(TAG, INFO, "Connection established immediately.\n");
     Connection *conn = new Connection();
     conn->fd = fd;
     conn->state = SENDING_CLIENT_HELLO;
@@ -110,6 +115,7 @@ Connection *client_connect_to_server(sockaddr_in *serv_addr) {
     return conn;
   } else if (result == -1 && errno == EINPROGRESS) {
     // connection underway
+    logd(TAG, INFO, "Connection underway (non-blocking).\n");
     Connection *conn = new Connection();
     conn->fd = fd;
     conn->state = CONNECTING;

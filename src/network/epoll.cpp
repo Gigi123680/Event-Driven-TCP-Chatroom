@@ -8,9 +8,13 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#ifndef __linux__
+#include <map>
+#include <poll.h>
+#include <vector>
+#endif
 #include <netinet/in.h>
 #include <string>
-#include <sys/epoll.h>
 #include <unistd.h>
 
 #include "../connection/connection.hpp"
@@ -18,6 +22,131 @@
 #include "epoll.hpp"
 
 #define TAG &EPOLL_TAG
+
+#ifndef __linux__
+struct PollEntry {
+  int fd;
+  uint32_t events;
+};
+
+// epoll_fd to vector of watched fd map
+static std::map<int, std::vector<PollEntry>> poll_instances;
+static int next_poll_instance = -2;
+
+static short epoll_events_to_poll(uint32_t events) {
+  short poll_events = 0;
+  if (events & EPOLLIN) {
+    poll_events |= POLLIN;
+  }
+  if (events & EPOLLOUT) {
+    poll_events |= POLLOUT;
+  }
+  return poll_events;
+}
+
+static uint32_t poll_events_to_epoll(short events) {
+  uint32_t epoll_events = 0;
+  if (events & (POLLIN | POLLPRI)) {
+    epoll_events |= EPOLLIN;
+  }
+  if (events & POLLOUT) {
+    epoll_events |= EPOLLOUT;
+  }
+  if (events & POLLERR) {
+    epoll_events |= EPOLLERR;
+  }
+  if (events & POLLHUP) {
+    epoll_events |= EPOLLHUP | EPOLLRDHUP;
+  }
+  return epoll_events;
+}
+
+int epoll_create1(int flags) {
+  (void)flags;
+  int epoll_fd = next_poll_instance--;
+  poll_instances[epoll_fd] = {};
+  return epoll_fd;
+}
+
+int epoll_ctl(int epoll_fd, int op, int fd, epoll_event *event) {
+  auto instance = poll_instances.find(epoll_fd);
+  if (instance == poll_instances.end()) {
+    errno = EBADF;
+    return -1;
+  }
+
+  std::vector<PollEntry> &entries = instance->second;
+  auto entry = entries.begin();
+  for (; entry != entries.end(); ++entry) {
+    if (entry->fd == fd) {
+      break;
+    }
+  }
+
+  if (op == EPOLL_CTL_ADD) {
+    if (entry != entries.end()) {
+      errno = EEXIST;
+      return -1;
+    }
+    entries.push_back({fd, event ? event->events : 0});
+    return 0;
+  }
+
+  if (op == EPOLL_CTL_MOD) {
+    if (entry == entries.end()) {
+      errno = ENOENT;
+      return -1;
+    }
+    entry->events = event ? event->events : 0;
+    return 0;
+  }
+
+  if (op == EPOLL_CTL_DEL) {
+    if (entry == entries.end()) {
+      errno = ENOENT;
+      return -1;
+    }
+    entries.erase(entry);
+    return 0;
+  }
+
+  errno = EINVAL;
+  return -1;
+}
+
+int epoll_wait(int epoll_fd, epoll_event *events, int maxevents, int timeout) {
+  auto instance = poll_instances.find(epoll_fd);
+  if (instance == poll_instances.end()) {
+    errno = EBADF;
+    return -1;
+  }
+
+  std::vector<pollfd> poll_fds;
+  poll_fds.reserve(instance->second.size());
+  for (const PollEntry &entry : instance->second) {
+    poll_fds.push_back({entry.fd, epoll_events_to_poll(entry.events), 0});
+  }
+
+  int ready_count = poll(poll_fds.data(), poll_fds.size(), timeout);
+  if (ready_count <= 0) {
+    return ready_count;
+  }
+
+  int event_count = 0;
+  for (size_t i = 0; i < poll_fds.size() && event_count < maxevents; ++i) {
+    uint32_t epoll_events = poll_events_to_epoll(poll_fds[i].revents);
+    if (epoll_events == 0) {
+      continue;
+    }
+
+    events[event_count].events = epoll_events;
+    events[event_count].data.fd = poll_fds[i].fd;
+    ++event_count;
+  }
+
+  return event_count;
+}
+#endif
 
 /**
  * Generic epoll update function for add, remove, and modify operations.
